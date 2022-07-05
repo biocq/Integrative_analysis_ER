@@ -1,0 +1,150 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# chooseBioCmirror() chooseCRANmirror()
+installed_pkgs <- installed.packages()
+
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+
+
+Prefix <- "D:/OneDrive - ucas.ac.cn/论文/epi_reg/part6/"
+if (length(setdiff("data.table", installed_pkgs)) > 0) {
+    install.packages(pkgs = setdiff("data.table", installed_pkgs))
+}
+if (length(setdiff("igraph", installed_pkgs)) > 0) {
+    install.packages(pkgs = setdiff("igraph", installed_pkgs))
+}
+library(ggpubr)
+library(data.table)
+library(igraph)
+```
+
+```{r}
+ppi <-  fread(file='D:/Documents/Downloads/BIOGRID-ALL-4.4.209.tab.txt', skip = 35, header =TRUE, sep ='\t',fill = TRUE)
+ppi <- ppi[,c("OFFICIAL_SYMBOL_A","OFFICIAL_SYMBOL_B","ORGANISM_A_ID","ORGANISM_B_ID")] # keep only physical interactions
+ppi <- ppi[which(ppi$ORGANISM_A_ID=="9606" & ppi$ORGANISM_B_ID=="9606"),1:2] # keep only human records
+ppi <- ppi[!duplicated(ppi),]
+
+ppi <- igraph::graph_from_data_frame(ppi, directed = F, vertices = NULL)
+ppi <- igraph::simplify(ppi,remove.loops = T)
+ppi <- as.data.frame(igraph::get.edgelist(ppi))
+```
+
+
+```{r}
+
+write.table(ppi, file=paste0(Prefix,"PPI_filtered.txt"),sep="\t",
+            col.names = TRUE,row.names = FALSE,quote=FALSE)
+```
+
+```{r}
+ppi <-  read.table(file='D:/OneDrive - ucas.ac.cn/论文/epi_reg/part6/PPI_filtered.txt', header = TRUE, sep ='\t')
+
+```
+
+```{r}
+DEGs <-  read.table(file='D:/OneDrive - ucas.ac.cn/论文/epi_reg/part5/dysregulated_genes.tsv', header = TRUE, sep ='\t')
+DEGs <- DEGs$ID
+```
+
+
+```{r}
+set.seed(1)
+
+whole_trans_network <- igraph::graph_from_data_frame(ppi, directed = FALSE)
+
+degree_all <- centr_degree(whole_trans_network, mode = "total")$res
+closeness_all <- estimate_closeness(whole_trans_network, mode = "total", cutoff = -1)
+betweenness_all <- estimate_betweenness(whole_trans_network, cutoff = -1)
+vg <- V(whole_trans_network)$name
+DEG_network_all_metrics_df <- data.frame("degree" = degree_all, "closeness" = closeness_all, "betweenness" = betweenness_all, "cat" = "all")
+```
+
+
+```{r}
+
+vector_genenames <- NULL
+for(i in 1:length(vg)){
+  vector_genenames <- c(vector_genenames, vg[i])
+}
+degree_table <- data.frame("gene" = vg, "degree" = degree_all)
+```
+
+```{r}
+degree_thr<-quantile(degree_table$degree, prob = seq(0, 1, length = 101), type = 5,na.rm=T) #99% percentile
+index_high<-which(degree_table$degree>as.numeric(degree_thr[length(degree_thr)-1]))
+hub_genes<-as.character(degree_table[index_high,1]) # 198
+hub_genes <- hub_genes[!hub_genes %in% DEGs] #176 hub genes after removing DEGs
+write.table(hub_genes, file=paste0(Prefix,"hub_genes.txt"),sep="\t",
+            col.names = FALSE,row.names = FALSE,quote=FALSE)
+```
+
+
+```{r}
+filtered_PPI <- ppi[ppi$V1 %in% DEGs | ppi$V2 %in% DEGs,]
+
+whole_trans_network <- igraph::graph_from_data_frame(filtered_PPI, directed = FALSE)
+degree_DEG <- centr_degree(whole_trans_network, mode = "total")$res
+closeness_DEG <- estimate_closeness(whole_trans_network, mode = "total", cutoff = -1)
+betweenness_DEG <- estimate_betweenness(whole_trans_network, cutoff = -1)
+DEG_network_metrics_df <- data.frame("degree" = degree_DEG, "closeness" = closeness_DEG, "betweenness" = betweenness_DEG, "cat" = "DEG")
+```
+
+```{r}
+library("gtools")
+ppi_copy <- ppi
+ppi_copy$V2 <- ppi_copy$V2[permute(1:nrow(ppi_copy))]
+filtered_PPI_permut <- ppi_copy[ppi_copy$V1 %in% DEGs | ppi_copy$V2 %in% DEGs,]
+
+whole_trans_network <- igraph::graph_from_data_frame(filtered_PPI_permut, directed = FALSE)
+degree_DEG_permu <- centr_degree(whole_trans_network, mode = "total")$res
+closeness_DEG_permu <- estimate_closeness(whole_trans_network, mode = "total", cutoff = -1)
+betweenness_DEG_permu <- estimate_betweenness(whole_trans_network, cutoff = -1)
+DEG_network_permu_metrics_df <- data.frame("degree" = degree_DEG_permu, "closeness" = closeness_DEG_permu, "betweenness" = betweenness_DEG_permu, "cat" = "ctrl")
+```
+
+```{r}
+metrics_combined <- rbind(DEG_network_all_metrics_df, DEG_network_metrics_df, DEG_network_permu_metrics_df)
+```
+
+```{r}
+long_dat <- data.table::melt(setDT(metrics_combined[, c("degree", "closeness", "betweenness", "cat")]), id.vars = "cat", measure.vars= c("degree", "closeness", "betweenness"), variable.name = "metrics", na.rm = TRUE)
+long_dat[long_dat$metrics=="closeness","value"] <- -log10(long_dat[long_dat$metrics=="closeness","value"])
+long_dat[long_dat$metrics=="betweenness","value"] <- log10(long_dat[long_dat$metrics=="betweenness","value"])
+long_dat[long_dat$metrics=="degree","value"] <- log10(long_dat[long_dat$metrics=="degree","value"])
+long_dat$value[which(!is.finite(long_dat$value))] <- 0
+
+degree_dat <- long_dat[long_dat$metrics=="degree", c("cat", "value")]
+betweenness_dat <- long_dat[long_dat$metrics=="betweenness", c("cat", "value")]
+closeness_dat <- long_dat[long_dat$metrics=="closeness", c("cat", "value")]
+```
+
+
+```{r}
+library(rstatix)
+pwc <- long_dat %>% group_by(metrics) %>%
+  wilcox_test(value ~ cat, p.adjust.method = "bonferroni")
+#pwc <- pwc %>% add_xy_position(x = "cat", group = "metrics", dodge = 0.8)
+#pwc$y.position <- pwc$y.position + 0.1
+pwc$y.position <- c(4.5,5.3,6.1,5.3,5.9,6.5,7.5,8.5,9.5)
+pwc$xmin <- c(1,1,2,1,1,2,1,1,2)
+pwc$xmax <- c(3,2,3,3,2,3,3,2,3)
+
+```
+
+```{r}
+
+p <- ggboxplot(long_dat, x = "cat", y = "value",
+          color = "cat", palette = "jama", add.params = list(size = 0.5), xlab = "Category", ylab = "log10Metrics")  + stat_pvalue_manual(pwc, color = "black", label = "p", tip.length = 0.02) + scale_y_continuous(expand = expansion(mult = c(0, 0.1)))
+pdf(paste0(Prefix, "network_metrics.pdf"), family="ArialMT", width=8, height=3)
+  facet(p, facet.by = "metrics", scales = "free_y")
+garbage <- dev.off()
+```
+
+

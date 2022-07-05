@@ -1,0 +1,282 @@
+---
+title: "SURVIVAL ANALYSIS"
+output: html_notebook
+---
+
+
+
+```{r}
+library(tidyr)
+Prefix <- "~/projects/ER_proj/"
+setwd(Prefix)
+input1 <- "TCGA_GTEX_FINAL.log2.without3cancer.tsv"
+logfile<-read.table(paste0(Prefix,"part5/",input1), header=T, sep="\t") #TCGA_GTEX_FINAL.log2.without3cancer.tsv
+surv<- logfile[with(logfile, logfile$sampletype %in% "Tumor"),]
+```
+
+Reformat the logfile into high and low values (Expression-wise)
+```{r}
+#High = Higher than mean
+#Low = Lower than mean
+array<- surv
+array2<- seq(ncol(array)-4)
+for (t in unique(surv$Type)){
+  arraysub<-surv[surv$Type==t,-c(1:4)]
+  colmean<- colMeans(arraysub)
+  for (r in c(1:nrow(arraysub))){
+    cond <- as.numeric(arraysub[r,]) > colmean
+    cond<- gsub("TRUE", "HIGH", cond)
+    cond<- gsub("FALSE", "LOW", cond)
+    array2<- rbind(array2, cond)
+}
+}
+array2 <- array2[-1,]
+colnames(array2)<-colnames(surv[,-c(1:4)])
+row.names(array2)<-NULL
+array3<- cbind(surv[,c(1:4)],array2)
+
+```
+
+```{r}
+input2 <- "TCGA_survival_data"
+survivaldata<-read.delim(paste0(Prefix,"part5/",input2)) #TCGA_survival_data
+```
+
+```{r}
+library(plyr)
+joined<- join(array3, survivaldata, by="sample") #use join function to add a column of gene names/Class corresponding to the ENSEMBL ID to the last column
+joined2<- na.omit(joined, cols="PFI.time") #Remove the rows that contain non-matching genes
+library(dplyr) #load the package for data manipulation
+#Testing
+survivalinput <- joined %>% dplyr::select(OS,OS.time,DSS,DSS.time,DFI,DFI.time,PFI,PFI.time, everything()) #place the last column to first column
+```
+
+
+```{r}
+###plot survival curves
+library("survminer")
+require("survival")
+for (t in unique(survivalinput$Type)){
+  arraysub<-survivalinput[survivalinput$Type==t,]
+  for (c in colnames(arraysub[,-c(1:12)])){
+  formula<-paste("Surv(OS.time, OS) ~",c)
+  form<- as.formula(formula)
+  fit <- surv_fit(form, data = arraysub)
+  tryCatch({
+      if(surv_pvalue(fit)$pval<0.1){
+            pdf(file=paste0(Prefix,"part5/survival/",paste(c,t,"survival.pdf",sep=".")),height=5,width=5,onefile=FALSE)
+          try(print(ggsurvplot(
+          fit, 
+          data = arraysub, 
+          size = 1,                 # change line size
+          palette = 
+            c("#E7B800", "#2E9FDF"),# custom color palettes
+          conf.int = TRUE,          # Add confidence interval
+          pval = TRUE,              # Add p-value
+          ggtheme = theme_bw(),     # Change ggplot2 theme
+          xlab = paste(t,"Time in days",sep="-")
+        )))
+          dev.off()
+        }
+  }, error = function(e){
+  })
+  
+  }
+
+}
+```
+
+Extract survival curve p value
+```{r}
+library("survminer")
+require("survival")
+my_function <- function(x){  #We create a function 
+  form <- paste("Surv(OS.time, OS) ~",x) #We state the formula for the p value calculation
+  form <- as.formula(form) #We translate it into a formula
+  fit <- surv_fit(form, data = survivalinput, group.by="Type") #Survival fits grouped by Type
+  return(surv_pvalue(fit)) #P value
+}
+output <- list()
+output <- sapply(colnames(survivalinput[,-c(1:12)]), my_function)
+for (i in c(1:ncol(output))){
+  for (j in c(1:nrow(output))){
+  output[j,i]<- output[j,i][[1]][,2]
+}
+}
+
+
+output2<- as.data.frame(output)
+output2<- as.data.frame(unlist(output2))
+output2$Gene<- gsub("\\..*","",rownames(output2))
+rownames(output2)<- gsub(":.*","",rownames(output2))
+output2$Type<-rownames(output2)
+output2$Type<- gsub(".*\\.","",output2$Type)
+rownames(output2)<-NULL
+output2 <- output2 %>% dplyr::select(Gene,Type, everything()) #place the last column to first column
+colnames(output2)<- c("Gene", "Type", "value")
+write.table(t(output), file=paste0(Prefix,"part5/survival/","survival_raw_pvalues_wide.tsv"),row.names=T, quote=FALSE, sep="\t")
+output3<-output2
+write.table(output2, file=paste0(Prefix,"part5/survival/","survival_raw_pvalues_long.tsv"),row.names=F, quote=FALSE, sep="\t")
+```
+
+
+```{r}
+output3$value<- 1/output3$value
+output4<-output3
+output4$value<- log(output4$value+1)
+write.table(output4, file=paste0(Prefix,"part5/survival/","survival_transformed_values.tsv"),row.names=FALSE, quote=FALSE, sep="\t")
+output5<- dcast(output4, Gene~Type)
+write.table(output5, file=paste0(Prefix,"part5/survival/","survival_transformed_values_reformatted.tsv"),row.names=FALSE, quote=FALSE, sep="\t")
+```
+
+
+```{r}
+output4<- read.delim(paste0(Prefix,"part5/survival/survival_transformed_values.tsv"))
+library(tidyverse)
+output_sign<-output4 %>% filter(value > 4.618)
+output_sign$value <- factor(output_sign$value, levels = unique(output_sign$value))
+output_sign2<-data.frame(table(output_sign[,1]))
+output_sign3<-output_sign2 %>% filter(Freq > 2)
+output_sign4 <- output_sign3[order(output_sign3$Freq),] 
+output_sign4$Freq <- factor(output_sign4$Freq, levels = unique(output_sign4$Freq))
+output_sign4$Var1 <- factor(output_sign4$Var1, levels = output_sign4$Var1[order(output_sign4$Freq)])
+
+
+
+
+library(ggplot2)
+pdf(paste0(Prefix,"part5/survival/survival_count_barplot_0.01.pdf"),height=5,width=5)
+p <- ggplot(output_sign4, aes(x=Var1,y=Freq)) + 
+       geom_bar(stat="identity",width = 0.75)+
+       scale_fill_manual(values = c("#216583", "#f76262"))+
+       coord_flip()+
+       theme(panel.background = element_blank(),
+         panel.border=element_rect(fill=NA),
+         panel.grid.major = element_blank(),
+         panel.grid.minor = element_blank(),
+         strip.background=element_blank(),
+         axis.text.x=element_text(colour="black"),
+         axis.text.y=element_text(colour="black"),
+         axis.ticks=element_line(colour="black"),
+         plot.margin=unit(c(1,1,1,1),"line"))
+print(p) 
+dev.off()
+```
+
+Box plots of transformed survival pvalues
+```{r}
+library(ggplot2)
+pdf(paste0(Prefix,"part5/survival/boxplot.survpvalueGene.pdf"),height=10,width=20)
+print(ggplot(output4, aes(x = Gene, y = value)) +
+    geom_boxplot(fill="#8c96c6", color="darkred")+
+    theme(axis.text.x = element_text(angle = 90))+
+    geom_text(data = subset(output4,value > 6.91),
+      mapping = aes(label = Type),vjust = 0, nudge_y = 0.05)+
+    scale_y_continuous(limits=c(0,60), expand = c(0, 0))
+    #annotate("segment", x =79, xend = 79, y = 23, yend = 25, arrow = arrow()) +
+    #annotate("text", x = 79, y = 22, label = "LGG(NSUN7) at >50"))
+    )
+dev.off()
+```
+
+heatmap of transformed survival pvalues
+```{r}
+library(ComplexHeatmap)
+library(circlize)
+#Type<- as.data.frame(meanfile$Type)
+#colnames(Type)<- c("Type")
+DEG<- read.delim(paste0(Prefix,"part5/dysregulated_genes.tsv"))
+DEG <- unique(DEG$ID)
+
+DEG_score<- read.delim(paste0(Prefix,"part5/dysregulation_scores.tsv"))
+DEG_selected <- unique(DEG_score$ID[DEG_score$res > 4 | DEG_score$res < -3])
+DEG_selected_col <- rownames(output6) %in% DEG_selected
+
+output5<- read.delim(paste0(Prefix,"part5/survival/survival_transformed_values_reformatted.tsv"))
+library(tidyverse)
+rownames(output5) <- output5[,1]
+output6<- output5
+output6[,1]<-NULL
+DEG_col <- rownames(output6) %in% DEG
+
+gene_anno<- read.delim(paste0(Prefix,"part5/human_id_symbol_class.tsv"))
+anno_col <- rep(0,nrow(output6))
+
+anno_col[rownames(output6) %in% gene_anno$Symbol[gene_anno$Class == "1_histone_reader"]] <- 1 #51B3AB
+anno_col[rownames(output6) %in% gene_anno$Symbol[gene_anno$Class == "2_histone_writer"]] <- 2 #1B2E5C
+anno_col[rownames(output6) %in% gene_anno$Symbol[gene_anno$Class == "3_histone_eraser"]] <- 3 #BD4389
+anno_col[rownames(output6) %in% gene_anno$Symbol[gene_anno$Class == "4_chromatin_remodeler"]] <- 4 #97B125
+anno_col[rownames(output6) %in% gene_anno$Symbol[gene_anno$Class == "5_DNA_methylation_reader"]] <- 5 #D71D18
+anno_col[rownames(output6) %in% gene_anno$Symbol[gene_anno$Class == "6_DNA_methylation_writer"]] <- 6 #EB5902
+anno_col[rownames(output6) %in% gene_anno$Symbol[gene_anno$Class == "7_DNA_methylation_eraser"]] <- 7 #1C9BCD
+anno_col[rownames(output6) %in% gene_anno$Symbol[gene_anno$Class == "8_histone_chaperone"]] <- 8 #AC3A23
+anno_col[rownames(output6) %in% gene_anno$Symbol[gene_anno$Class == "9_Polycomb_group_protein"]] <- 9 #009444
+anno_col[rownames(output6) %in% gene_anno$Symbol[gene_anno$Class == "10_RNA_modification"]] <- 10 #EEEA84
+```
+
+
+```{r}
+pdf(paste0(Prefix,"part5/survival/heatmap_survivaltransformedpvalues_2.pdf"),height=20,width=15)
+ra = rowAnnotation(DEG = DEG_col+0, col = list(DEG = c("0" = "white", "1" = "red")), 
+        width = unit(5, "mm"))
+ra2 = rowAnnotation(ER_type = anno_col, col = list(ER_type = c("1" = "#51B3AB", "2" = "#1B2E5C", "3" = "#BD4389", "4" = "#97B125", "5" = "#D71D18", "6" = "#EB5902", "7" = "#1C9BCD", "8" = "#AC3A23", "9" = "#009444", "10" = "#EEEA84")), 
+                   
+        width = unit(5, "mm"))
+Heatmap(output6, name = "Transformed log(P-value)", 
+        col = colorRamp2(c(0,1,3,5,10), c("#fcf9ec","#fcf9ec","#ffe2e2","#ff8260", "#900048"),space = "RGB"),
+        cluster_columns = TRUE,
+        column_title = "Cancer Tissues", 
+        column_title_gp = gpar(fontsize = 10, fontface = "bold"),
+        column_names_gp = gpar(fontsize = 13, fontface = "bold"),
+        row_title = "ER genes", row_title_rot = 90,
+        row_title_gp = gpar(fontsize = 8, fontface = "bold"),
+        cluster_rows = F,
+        row_dend_width = unit(4, "cm"),
+        show_row_names = TRUE,
+        row_names_gp = gpar(fontsize = 10), #row names size
+        #column_order = 1:dim(data4)[2],#Keep the column order, make clustering FALSE for this
+        row_dend_side = "right", #Dendogram on the right side
+        row_order = order(anno_col),
+        #row_order = 1:dim(data4)[1], #Keep the row order, make clustering FALSE for this
+        show_column_dend = TRUE, #
+        column_dend_side = "top",
+        column_dend_height = unit(2.5, "cm"),
+        column_names_side = "bottom", right_annotation = ra) + ra2 +
+    rowAnnotation(link = anno_mark(at = which(DEG_selected_col), 
+        labels = rownames(output6)[DEG_selected_col], 
+        labels_gp = gpar(fontsize = 7), padding = unit(0.1, "mm")))
+
+
+dev.off()
+
+```
+
+```{r}
+pdf(paste0(Prefix,"part5/survival/heatmap_survivaltransformedpvalues_3.pdf"),height=20,width=15)
+
+Heatmap(output6, name = "Transformed log(P-value)", 
+        col = colorRamp2(c(0,1,3,5,10), c("#fcf9ec","#fcf9ec","#ffe2e2","#ff8260", "#900048"),space = "RGB"),
+        cluster_columns = TRUE,
+        column_title = "Cancer Tissues", 
+        column_title_gp = gpar(fontsize = 10, fontface = "bold"),
+        column_names_gp = gpar(fontsize = 13, fontface = "bold"),
+        row_title = "ER genes", row_title_rot = 90,
+        row_title_gp = gpar(fontsize = 8, fontface = "bold"),
+        cluster_rows = T,
+        row_dend_width = unit(4, "cm"),
+        show_row_names = TRUE,
+        row_names_gp = gpar(fontsize = 10), #row names size
+        #column_order = 1:dim(data4)[2],#Keep the column order, make clustering FALSE for this
+        row_dend_side = "right", #Dendogram on the right side
+        
+        #row_order = 1:dim(data4)[1], #Keep the row order, make clustering FALSE for this
+        show_column_dend = TRUE, #
+        column_dend_side = "top",
+        column_dend_height = unit(2.5, "cm"),
+        column_names_side = "bottom", right_annotation = ra) + ra2 +
+    rowAnnotation(link = anno_mark(at = which(DEG_selected_col), 
+        labels = rownames(output6)[DEG_selected_col], 
+        labels_gp = gpar(fontsize = 7), padding = unit(0.1, "mm")))
+dev.off()
+```
+
