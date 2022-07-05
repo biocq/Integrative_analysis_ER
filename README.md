@@ -1,3 +1,3 @@
 # Integrative_analysis_ER
 
-Codes are available at https://github.com/novoalab/RNAModMachinery.
+Rmd files are related to the manuscript: "Identification and characterization of Epigenetic regulators across species and cancer types".
