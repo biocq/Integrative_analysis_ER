@@ -1,0 +1,256 @@
+---
+title: "Figure 1 c-e"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+Prefix <- "D:/OneDrive - ucas.ac.cn/论文/epi_reg/part1/"
+library("org.Hs.eg.db")
+library("GOSemSim")
+library(ggpubr)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+duplicated_gene_coexp <- read.table(paste(Prefix, "processed_duplicated_gene_coexp.txt", sep = ""), header = TRUE, sep = "\t")
+
+set.seed(1)
+duplicated_gene_coexp_ctrl <- duplicated_gene_coexp
+library("gtools")
+duplicated_gene_coexp_ctrl$GeneID_2 <- duplicated_gene_coexp$GeneID_2[permute(1:nrow(duplicated_gene_coexp))]
+write.table(duplicated_gene_coexp_ctrl, file = paste(Prefix, "duplicated_gene_coexp_ctrl.txt", sep = ""), sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
+```
+
+
+```{r cars}
+duplicated_gene_coexp$MF_sim <-NA
+duplicated_gene_coexp$BP_sim <- NA
+duplicated_gene_coexp_ctrl$MF_sim <-NA
+duplicated_gene_coexp_ctrl$BP_sim <- NA
+hsGOMF <- godata('org.Hs.eg.db', ont= "MF")
+hsGOBP <- godata('org.Hs.eg.db', ont= "BP")
+
+hsGOMF_process <- function(x, y) {
+    res <- geneSim(x, y, semData=hsGOMF, measure= "Wang", combine= "BMA")
+  if(is.na(x) | is.na(y)){
+    return(NA)
+  }else{
+    if(is.list(res)){
+      return(res["geneSim"])
+    }else{
+      return(NA)
+    }
+  }
+}
+
+hsGOBP_process <- function(x, y) {
+    res <- geneSim(x, y, semData=hsGOBP, measure= "Wang", combine= "BMA")
+  if(is.na(x) | is.na(y)){
+    return(NA)
+  }else{
+    if(is.list(res)){
+      return(res["geneSim"])
+    }else{
+      return(NA)
+    }
+    
+  }
+}
+tmp <- duplicated_gene_coexp[
+  1 : nrow(
+  duplicated_gene_coexp), c("GeneID_1", "GeneID_2")]
+
+tmp_ctrl <- duplicated_gene_coexp_ctrl[
+  1 : nrow(
+  duplicated_gene_coexp_ctrl), c("GeneID_1", "GeneID_2")]
+```
+
+
+```{r cars}
+suppressMessages(library(parallel))
+suppressMessages(library(snow))
+options(cl.cores = detectCores() / 2)
+this.cluster <- makeCluster(getOption("cl.cores", 2))
+clusterCall(cl = this.cluster, fun = function(){
+})
+
+if(formalArgs(clusterExport)[2] %in% "list"){
+    clusterExport(cl = this.cluster, list = c("hsGOMF", "hsGOBP", "hsGOMF_process", "hsGOBP_process", "tmp", "geneSim", "tmp_ctrl"))
+}else{
+    clusterExport(cl = this.cluster, varlist = c("hsGOMF", "hsGOBP", "hsGOMF_process", "hsGOBP_process", "tmp", "geneSim", "tmp_ctrl"))
+}
+
+MF_sim <- 
+parLapply(cl = this.cluster,
+    1:nrow(tmp),
+    function(idx) {
+        rtn <- replicate(1, hsGOMF_process(x=as.numeric(tmp[idx, 1]), y=as.numeric(tmp[idx, 2])), simplify = FALSE)
+        return(rtn)
+    }
+)
+
+BP_sim <- 
+parLapply(cl = this.cluster,
+    1:nrow(tmp),
+    function(idx) {
+        rtn <- replicate(1, hsGOBP_process(x=as.numeric(tmp[idx, 1]), y=as.numeric(tmp[idx, 2])), simplify = FALSE)
+        return(rtn)
+    }
+)
+
+MF_sim_ctrl <- 
+parLapply(cl = this.cluster,
+    1:nrow(tmp_ctrl),
+    function(idx) {
+        rtn <- replicate(1, hsGOMF_process(x=as.numeric(tmp_ctrl[idx, 1]), y=as.numeric(tmp_ctrl[idx, 2])), simplify = FALSE)
+        return(rtn)
+    }
+)
+
+BP_sim_ctrl <- 
+parLapply(cl = this.cluster,
+    1:nrow(tmp_ctrl),
+    function(idx) {
+        rtn <- replicate(1, hsGOBP_process(x=as.numeric(tmp_ctrl[idx, 1]), y=as.numeric(tmp_ctrl[idx, 2])), simplify = FALSE)
+        return(rtn)
+    }
+)
+
+stopCluster(this.cluster)
+MF_sim_vector <- c()
+for(j in 1:length(MF_sim)){
+        MF_sim_vector <- c(MF_sim_vector, as.numeric(MF_sim[[j]][[1]]))
+}
+BP_sim_vector <- c()
+for(j in 1:length(BP_sim)){
+        BP_sim_vector <- c(BP_sim_vector, as.numeric(BP_sim[[j]][[1]]))
+}
+
+MF_sim_ctrl_vector <- c()
+for(j in 1:length(MF_sim)){
+        MF_sim_ctrl_vector <- c(MF_sim_ctrl_vector, as.numeric(MF_sim_ctrl[[j]][[1]]))
+}
+BP_sim_ctrl_vector <- c()
+for(j in 1:length(BP_sim)){
+        BP_sim_ctrl_vector <- c(BP_sim_ctrl_vector, as.numeric(BP_sim_ctrl[[j]][[1]]))
+}
+duplicated_gene_coexp$MF_sim <- MF_sim_vector
+duplicated_gene_coexp$BP_sim <- BP_sim_vector
+
+duplicated_gene_coexp_ctrl$MF_sim <- MF_sim_ctrl_vector
+duplicated_gene_coexp_ctrl$BP_sim <- BP_sim_ctrl_vector
+
+duplicated_gene_coexp$cat <- "Real"
+duplicated_gene_coexp_ctrl$cat <- "Ctrl"
+combined_dat <- rbind(duplicated_gene_coexp,duplicated_gene_coexp_ctrl)
+write.table(combined_dat, file = paste(Prefix, "combined_dat.txt", sep = ""), sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
+```
+
+
+```{r}
+combined_dat <- read.table(paste(Prefix, "combined_dat.txt", sep = ""), header = TRUE, sep = "\t")
+```
+
+
+```{r}
+library(data.table)
+long_dat <- data.table::melt(setDT(combined_dat[, c("MF_sim", "BP_sim", "cat")]), id.vars = "cat", measure.vars= c("MF_sim", "BP_sim"), variable.name = "pathway", na.rm = TRUE)
+```
+
+Semantic similarity of GO BP
+```{r}
+library(dplyr)
+library(rstatix)
+pwc <- long_dat[long_dat$pathway=="BP_sim",] %>%
+  #group_by(pathway) %>%
+  wilcox_test(value ~ cat, p.adjust.method = "bonferroni")
+
+pwc <- pwc %>% add_xy_position(x = "cat" , group= "cat", dodge = 0.8)
+pwc$y.position <- pwc$y.position + 0.1
+#pwc$xmin <- pwc$xmin - 0.2
+#pwc$xmax <- pwc$xmax - 0.2
+
+library(ggpubr)
+BP_plot <- ggboxplot(long_dat[long_dat$pathway=="BP_sim",], x = "cat", y = "value",
+          color = "cat", palette = "jama",
+          add = "jitter", add.params = list(size = 0.5), xlab = "Category", ylab = "GO BP semantic similarity") + scale_x_discrete(labels = c("Coexp", "Permutated")) + stat_pvalue_manual(pwc, color = "black", label = "p", tip.length = 0.02)+ scale_y_continuous(expand = expansion(mult = c(0, 0.1))) + rremove("legend")
+```
+
+Semantic similarity of GO MF
+```{r message=FALSE, warning=FALSE}
+pwc <- long_dat[long_dat$pathway=="MF_sim",] %>%
+  #group_by(pathway) %>%
+  wilcox_test(value ~ cat, p.adjust.method = "bonferroni")
+
+pwc <- pwc %>% add_xy_position(x = "cat" , group= "cat", dodge = 0.8)
+pwc$y.position <- pwc$y.position + 0.1
+#pwc$xmin <- pwc$xmin - 0.2
+#pwc$xmax <- pwc$xmax - 0.2
+
+library(ggpubr)
+MF_plot <- ggboxplot(long_dat[long_dat$pathway=="MF_sim",], x = "cat", y = "value",
+          color = "cat", palette = "jama",
+          add = "jitter", add.params = list(size = 0.5), xlab = "Category", ylab = "GO MF semantic similarity") + scale_x_discrete(labels = c("Coexp", "Permutated")) + stat_pvalue_manual(pwc, color = "black", label = "p", tip.length = 0.02)+ scale_y_continuous(expand = expansion(mult = c(0, 0.1))) + rremove("legend")
+```
+
+
+```{r Boxplot_semantic_similarity, fig.height=3, fig.width=2.5, message=FALSE, warning=FALSE}
+ggarrange(BP_plot, MF_plot, ncol = 2, nrow = 1)
+```
+
+Process expression correlation data from COXPRESdb.
+```{r}
+zscores <- read.table(paste(Prefix, "duplicated_gene_coexp_with_ctrl.txt", sep = ""), header = TRUE, sep = "\t")
+
+long_dat_scores <- data.frame(zscore = c(zscores[, "Exp_corr_zscore"],zscores[, "Permutated_exp_corr_zscore"]),cat = c(rep("obs", nrow(zscores)),rep("perm", nrow(zscores))))
+
+```
+
+```{r Boxplot_corr, fig.height=3, fig.width=2.5, message=FALSE, warning=FALSE}
+pwc <- long_dat_scores %>%
+  wilcox_test(zscore ~ cat, p.adjust.method = "bonferroni")
+
+pwc <- pwc %>% add_xy_position(x = "cat" , group= "cat", dodge = 0.8)
+pwc$y.position <- pwc$y.position + 0.1
+corr_plot <- ggboxplot(long_dat_scores, x = "cat", y = "zscore",
+          color = "cat", palette = "jama",
+          add = "jitter", add.params = list(size = 0.5), xlab = "Category", ylab = "Duplicated gene expression correlation z-scores") + scale_x_discrete(labels = c("Coexp", "Permutated")) + stat_pvalue_manual(pwc, color = "black", label = "p", tip.length = 0.02) + scale_y_continuous(expand = expansion(mult = c(0, 0.1)),breaks = c(-2, -1, 0, 2, 5, 10, 15, 20), labels = c("-2", "-1", "0", "2", "5", "10", "15", "20")) + rremove("legend")
+```
+
+
+```{r}
+zscores <- read.table(paste(Prefix, "duplicated_gene_coexp_with_ctrl.txt", sep = ""), header = TRUE, sep = "\t")
+quantile90 <- quantile(zscores$Permutated_exp_corr_zscore,na.rm=T,probs=c(0.1,0.9))[2]
+
+
+duplication_events <- read.table(paste(Prefix, "processed_duplication_events.txt", sep = ""), header = TRUE, sep = "\t")
+
+duplicated_gene_coexp <- read.table(paste(Prefix, "processed_duplicated_gene_coexp.txt", sep = ""), header = TRUE, sep = "\t")
+noncorr_genes_indexes <- which(duplicated_gene_coexp$Exp_corr_zscore < quantile90)
+noncorr_genes <- duplication_events[which(duplicated_gene_coexp$Exp_corr_zscore < quantile90),10:11]
+```
+
+```{r}
+combined_dat <- read.table(paste(Prefix, "combined_dat.txt", sep = ""), header = TRUE, sep = "\t")
+combined_dat_ctrl <- combined_dat[which(combined_dat$cat=="Ctrl"),]
+combined_dat_ctrl[is.na(combined_dat_ctrl)] <- 0
+
+BP_quantile95 <- quantile(combined_dat_ctrl$BP_sim,probs=c(0.1,0.9))[2]
+MF_quantile95 <- quantile(combined_dat_ctrl$MF_sim,probs=c(0.1,0.9))[2]
+
+nonsemsim_genes_indexes <- which(combined_dat$MF_sim < MF_quantile95 & combined_dat$BP_sim < BP_quantile95 & combined_dat$cat=="Real")
+nonsemsim_genes <- duplication_events[nonsemsim_genes_indexes,10:11]
+```
+
+Select gene pairs that fail to be functionally related gene pairs
+```{r}
+candidate_gene_pairs <- cbind(duplication_events[intersect(nonsemsim_genes_indexes,noncorr_genes_indexes), 10:13],combined_dat[intersect(nonsemsim_genes_indexes,noncorr_genes_indexes), 3:6])
+write.table(candidate_gene_pairs, file = paste(Prefix, "candidate_gene_pairs.txt", sep = ""), sep = "\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
+```
+

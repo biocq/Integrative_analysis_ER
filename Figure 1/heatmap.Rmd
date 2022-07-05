@@ -1,0 +1,29 @@
+---
+title: "Part 1: Phylogenetic analysis"
+output: html_notebook
+---
+
+### Analysis for the Amniote Orthologs
+
+1. Arguments introduced for the execution
+```{r}
+
+Prefix <- "~/projects/ER_proj/part1/"
+library("ggplot2")
+```
+
+```{r}
+data<- read.delim(paste0(Prefix,"processed_duplication_events.txt"))
+```
+
+```{r}
+
+library(reshape2)
+library(RColorBrewer)
+newdf <- reshape2::dcast(data[,c(1,9)], Domain ~ Dup_time)
+long <- melt(newdf)
+dat <- newdf[,-1]
+rownames(dat)<-newdf[,1]
+dat <- log10(dat+1)
+pheatmap(dat, color = colorRampPalette(brewer.pal(9, "Purples"))(20), cellwidth = 10, cellheight = 10,cluster_cols=F)
+```
