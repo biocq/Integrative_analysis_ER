@@ -1,3 +1,3 @@
 # Integrative_analysis_ER
 
-Rmd files are related to the manuscript: "Identification and characterization of Epigenetic regulators across species and cancer types".
+Rmd files are related to the manuscript: "A Comprehensive Atlas of Epigenetic Regulators Reveals Tissue-specific Epigenetic Regulation Patterns".
